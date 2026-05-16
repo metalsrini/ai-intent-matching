@@ -1,0 +1,89 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id               String          @id @default(cuid())
+  displayName      String
+  createdAt        DateTime        @default(now())
+  sessions         ChatSession[]
+  profile          IntentProfile?
+  matchesAsA       Match[]         @relation("UserA")
+  matchesAsB       Match[]         @relation("UserB")
+  sentRequests     FriendRequest[] @relation("SentRequests")
+  receivedRequests FriendRequest[] @relation("ReceivedRequests")
+  directMessages   DirectMessage[]
+}
+
+model FriendRequest {
+  id         String   @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  status     String   @default("pending") // pending | accepted | rejected
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  fromUser   User     @relation("SentRequests", fields: [fromUserId], references: [id])
+  toUser     User     @relation("ReceivedRequests", fields: [toUserId], references: [id])
+
+  @@unique([fromUserId, toUserId])
+}
+
+model DirectMessage {
+  id        String   @id @default(cuid())
+  roomId    String   // sorted "{userAId}_{userBId}"
+  senderId  String
+  content   String
+  createdAt DateTime @default(now())
+  sender    User     @relation(fields: [senderId], references: [id])
+}
+
+model ChatSession {
+  id        String         @id @default(cuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id])
+  messages  Message[]
+  profile   IntentProfile?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model Message {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id])
+  role      String      // "user" | "assistant"
+  content   String
+  createdAt DateTime    @default(now())
+}
+
+model IntentProfile {
+  id            String      @id @default(cuid())
+  userId        String      @unique
+  sessionId     String      @unique
+  user          User        @relation(fields: [userId], references: [id])
+  session       ChatSession @relation(fields: [sessionId], references: [id])
+  summaryText   String
+  profileJson   String      // structured JSON: { summary, goals, interests, needs, lookingFor, tags }
+  extractedTags String      // comma-separated for quick scanning
+  updatedAt     DateTime    @updatedAt
+}
+
+model Match {
+  id              String   @id @default(cuid())
+  userAId         String
+  userBId         String
+  userA           User     @relation("UserA", fields: [userAId], references: [id])
+  userB           User     @relation("UserB", fields: [userBId], references: [id])
+  similarityScore Float
+  rationale       String
+  sharedThemes    String   // comma-separated
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userAId, userBId])
+}
