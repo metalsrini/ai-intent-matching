@@ -26,7 +26,9 @@ export interface SearchSource {
 export type Message = {
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;
   sources?: SearchSource[];
+  streaming?: boolean;
 };
 
 interface Props {
@@ -221,6 +223,15 @@ function Sources({ sources }: { sources: SearchSource[] }) {
   );
 }
 
+// remark-math only parses $...$ and $$...$$. LLMs commonly emit \(...\) and
+// \[...\] for LaTeX, so we normalize those to dollar delimiters before
+// handing the content to the markdown pipeline.
+function normalizeMathDelimiters(text: string): string {
+  return text
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_, body) => `$$${body}$$`)
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, body) => `$${body}$`);
+}
+
 function AssistantBody({
   content,
   sources,
@@ -260,9 +271,34 @@ function AssistantBody({
           blockquote: wrap("blockquote"),
         }}
       >
-        {content}
+        {normalizeMathDelimiters(content)}
       </ReactMarkdown>
     </div>
+  );
+}
+
+function ThinkingPanel({
+  reasoning,
+  streaming,
+  hasContent,
+}: {
+  reasoning: string;
+  streaming: boolean;
+  hasContent: boolean;
+}) {
+  // Open while the model is still thinking (no content yet). Once content
+  // starts arriving, collapse so it doesn't dominate the layout.
+  const open = streaming && !hasContent;
+  return (
+    <details open={open} className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--sidebar-bg)]">
+      <summary className="cursor-pointer select-none px-4 py-2.5 text-[13px] font-medium text-[var(--text-muted)] flex items-center gap-2 list-none [&::-webkit-details-marker]:hidden">
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--text-muted)] animate-pulse" style={{ animationDuration: streaming ? "1s" : "0s", opacity: streaming ? 1 : 0.4 }} />
+        {streaming && !hasContent ? "Thinking…" : "Thought process"}
+      </summary>
+      <div className="px-4 pb-3 pt-1 text-[13px] leading-relaxed text-[var(--text-muted)] whitespace-pre-wrap border-t border-[var(--border)]">
+        {reasoning}
+      </div>
+    </details>
   );
 }
 
@@ -277,10 +313,24 @@ function MessageBubble({ msg }: { msg: Message }) {
     );
   }
 
+  const hasContent = msg.content.length > 0;
+  const hasReasoning = (msg.reasoning ?? "").length > 0;
+  const showInitialDots = !!msg.streaming && !hasContent && !hasReasoning;
+
   return (
     <div className="w-full">
       {msg.sources && msg.sources.length > 0 && <Sources sources={msg.sources} />}
-      <AssistantBody content={msg.content} sources={msg.sources ?? []} />
+      {hasReasoning && (
+        <ThinkingPanel
+          reasoning={msg.reasoning ?? ""}
+          streaming={!!msg.streaming}
+          hasContent={hasContent}
+        />
+      )}
+      {hasContent && (
+        <AssistantBody content={msg.content} sources={msg.sources ?? []} />
+      )}
+      {showInitialDots && <TypingDots />}
     </div>
   );
 }
@@ -367,7 +417,6 @@ export default function ChatInterface({
           {messages.map((msg, i) => (
             <MessageBubble key={i} msg={msg} />
           ))}
-          {sending && <TypingDots />}
         </div>
       </div>
       <div className="px-6 pb-6 pt-2">

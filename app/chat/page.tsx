@@ -12,7 +12,9 @@ type Message = {
   id?: string;
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;
   sources?: SearchSource[];
+  streaming?: boolean;
 };
 
 type Match = {
@@ -86,9 +88,25 @@ export default function ChatPage() {
     if (!userId || !sessionId || !text.trim() || sending) return;
 
     const userMsg: Message = { role: "user", content: text.trim() };
-    setMessages((prev) => [...prev, userMsg]);
+    const assistantPlaceholder: Message = {
+      role: "assistant",
+      content: "",
+      reasoning: "",
+      streaming: true,
+    };
+
+    setMessages((prev) => [...prev, userMsg, assistantPlaceholder]);
     setSending(true);
     setView("chat");
+
+    const updateLast = (patch: (m: Message) => Message) => {
+      setMessages((prev) => {
+        if (prev.length === 0) return prev;
+        const next = prev.slice();
+        next[next.length - 1] = patch(next[next.length - 1]);
+        return next;
+      });
+    };
 
     try {
       const res = await fetch("/api/chat", {
@@ -97,39 +115,77 @@ export default function ChatPage() {
         body: JSON.stringify({ userId, sessionId, message: text.trim() }),
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: `Error: ${data.error ?? "Something went wrong."}`,
-          },
-        ]);
+      if (!res.ok || !res.body) {
+        const txt = await res.text().catch(() => "");
+        updateLast(() => ({
+          role: "assistant",
+          content: `Error: ${txt || res.statusText}`,
+        }));
         return;
       }
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: data.reply,
-          sources: Array.isArray(data.sources) ? data.sources : undefined,
-        },
-      ]);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, nl).replace(/\r$/, "").trim();
+          buffer = buffer.slice(nl + 1);
+
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data) continue;
+
+          let event: {
+            type: string;
+            delta?: string;
+            sources?: SearchSource[];
+            message?: string;
+          };
+          try {
+            event = JSON.parse(data);
+          } catch {
+            continue;
+          }
+
+          if (event.type === "sources" && Array.isArray(event.sources)) {
+            const srcs = event.sources;
+            updateLast((m) => ({ ...m, sources: srcs }));
+          } else if (event.type === "reasoning" && event.delta) {
+            const d = event.delta;
+            updateLast((m) => ({ ...m, reasoning: (m.reasoning ?? "") + d }));
+          } else if (event.type === "content" && event.delta) {
+            const d = event.delta;
+            updateLast((m) => ({ ...m, content: m.content + d }));
+          } else if (event.type === "done") {
+            updateLast((m) => ({ ...m, streaming: false }));
+          } else if (event.type === "error") {
+            const msg = event.message ?? "Stream error";
+            updateLast((m) => ({
+              ...m,
+              content: m.content || `Error: ${msg}`,
+              streaming: false,
+            }));
+          }
+        }
+      }
 
       setTimeout(fetchMatches, 5_000);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "Sorry, I couldn't reach the server. Please try again.",
-        },
-      ]);
+    } catch (err) {
+      updateLast(() => ({
+        role: "assistant",
+        content: "Sorry, I couldn't reach the server. Please try again.",
+      }));
+      console.error(err);
     } finally {
       setSending(false);
+      updateLast((m) => ({ ...m, streaming: false }));
     }
   }
 

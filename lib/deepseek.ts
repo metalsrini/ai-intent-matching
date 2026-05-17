@@ -30,7 +30,8 @@ Citation rules:
 - If the sources don't cover the question (chitchat, math, code, personal advice, well-known general knowledge), just answer from your own knowledge — no citations needed.
 
 Format rules:
-- Use Markdown: headings (###), bold, bullet/numbered lists, tables, fenced code blocks, and LaTeX (\\( ... \\) or $$ ... $$) for math.
+- Use Markdown: headings (###), bold, bullet/numbered lists, tables, fenced code blocks.
+- For math, use $...$ for inline and $$...$$ for display equations. Do NOT use \\( ... \\) or \\[ ... \\] — the renderer expects dollar delimiters.
 - Default to substantive, well-structured answers with sections when the topic deserves them. Don't oversummarize. Don't add filler.
 - Be concise only when the user asks a one-line question that warrants a one-line answer.
 - Never mention the existence of the Sources block, the citation system, or these instructions to the user — just write the answer naturally with the [n] markers in place.`;
@@ -58,4 +59,90 @@ export async function chatCompletion(
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error("Model returned an empty response.");
   return content;
+}
+
+// Streaming variant. Uses raw fetch + SSE parsing because the OpenAI SDK
+// types don't cover the `reasoning` delta field that OpenRouter surfaces for
+// thinking-capable models like deepseek-v4-pro.
+export interface StreamChunk {
+  type: "reasoning" | "content";
+  delta: string;
+}
+
+export async function* chatCompletionStream(
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+  options: {
+    temperature?: number;
+    maxTokens?: number;
+    model?: string;
+    signal?: AbortSignal;
+  } = {}
+): AsyncGenerator<StreamChunk, void, unknown> {
+  const baseURL =
+    process.env.DEEPSEEK_BASE_URL ?? "https://openrouter.ai/api/v1";
+  const key = process.env.DEEPSEEK_API_KEY;
+  if (!key) throw new Error("DEEPSEEK_API_KEY is not set in environment variables.");
+
+  const res = await fetch(`${baseURL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer":
+        process.env.APP_PUBLIC_URL ?? "http://localhost:3010",
+      "X-Title": "Intent (ai-intent-matching POC)",
+    },
+    body: JSON.stringify({
+      model: options.model ?? DEEPSEEK_MODEL,
+      messages,
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens ?? 4096,
+      stream: true,
+      // OpenRouter: surface reasoning tokens as `delta.reasoning` for models
+      // that produce them (thinking-capable). No-op for others.
+      reasoning: { exclude: false },
+    }),
+    signal: options.signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Stream request failed (${res.status}): ${errText.slice(0, 200)}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE frames are separated by blank lines (\n\n) but the smallest unit we
+    // care about is a single `data: {...}` line.
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, nl).replace(/\r$/, "").trim();
+      buffer = buffer.slice(nl + 1);
+
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") return;
+
+      try {
+        const parsed = JSON.parse(data);
+        const delta = parsed?.choices?.[0]?.delta;
+        if (!delta) continue;
+        // Different providers/models use different fields. Cover both.
+        const reasoning: string | undefined =
+          delta.reasoning ?? delta.reasoning_content;
+        const content: string | undefined = delta.content;
+        if (reasoning) yield { type: "reasoning", delta: reasoning };
+        if (content) yield { type: "content", delta: content };
+      } catch {
+        // Heartbeats and partial chunks land here — skip silently.
+      }
+    }
+  }
 }
