@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut, PanelLeft, SquarePen } from "lucide-react";
 import ChatInterface, { type SearchSource } from "@/components/ChatInterface";
-import Sidebar, { type ChatView } from "@/components/Sidebar";
+import Sidebar, { type ChatView, type SessionItem } from "@/components/Sidebar";
 import MatchDisplay from "@/components/MatchDisplay";
 import FriendRequests from "@/components/FriendRequests";
 
@@ -32,12 +32,14 @@ export default function ChatPage() {
   const [displayName, setDisplayName] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [view, setView] = useState<ChatView>("chat");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const matchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Boot: read session from localStorage, redirect to / if not signed in.
   useEffect(() => {
     const uid = localStorage.getItem("userId");
     const sid = localStorage.getItem("sessionId");
@@ -53,8 +55,11 @@ export default function ChatPage() {
     setDisplayName(name);
   }, [router]);
 
+  // Load message history whenever the active sessionId changes.
   useEffect(() => {
     if (!sessionId) return;
+    setLoadingHistory(true);
+    setMessages([]);
 
     fetch(`/api/chat?sessionId=${sessionId}`)
       .then((r) => r.json())
@@ -64,6 +69,23 @@ export default function ChatPage() {
       .catch(console.error)
       .finally(() => setLoadingHistory(false));
   }, [sessionId]);
+
+  const loadSessions = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch(`/api/sessions?userId=${userId}`);
+      const data = await res.json();
+      if (Array.isArray(data.sessions)) setSessions(data.sessions);
+    } catch (err) {
+      console.error("[loadSessions]", err);
+    }
+  }, [userId]);
+
+  // Initial sessions fetch + refetch after each message exchange (titles update).
+  useEffect(() => {
+    if (!userId) return;
+    loadSessions();
+  }, [userId, loadSessions]);
 
   const fetchMatches = useCallback(() => {
     if (!userId) return;
@@ -177,6 +199,8 @@ export default function ChatPage() {
       }
 
       setTimeout(fetchMatches, 5_000);
+      // Refresh sidebar titles + ordering once the exchange persists.
+      loadSessions();
     } catch (err) {
       updateLast(() => ({
         role: "assistant",
@@ -189,8 +213,66 @@ export default function ChatPage() {
     }
   }
 
-  function handleNewChat() {
+  async function handleNewChat() {
+    if (!userId) return;
     setView("chat");
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setSessionId(data.id);
+      localStorage.setItem("sessionId", data.id);
+      setMessages([]);
+      // Optimistically insert at top
+      setSessions((prev) => [
+        { id: data.id, title: data.title, messageCount: 0 },
+        ...prev,
+      ]);
+    } catch (err) {
+      console.error("[handleNewChat]", err);
+    }
+  }
+
+  async function handleSelectSession(id: string) {
+    if (!userId || id === sessionId) {
+      setView("chat");
+      return;
+    }
+    setSessionId(id);
+    localStorage.setItem("sessionId", id);
+    setView("chat");
+  }
+
+  async function handleDeleteSession(id: string) {
+    if (!userId) return;
+    if (!confirm("Delete this conversation? This can't be undone.")) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${id}?userId=${userId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) return;
+
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+
+      // If we deleted the current session, jump to the most recent remaining
+      // or create a fresh one if there are none.
+      if (id === sessionId) {
+        const remaining = sessions.filter((s) => s.id !== id);
+        if (remaining.length > 0) {
+          setSessionId(remaining[0].id);
+          localStorage.setItem("sessionId", remaining[0].id);
+        } else {
+          await handleNewChat();
+        }
+      }
+    } catch (err) {
+      console.error("[handleDeleteSession]", err);
+    }
   }
 
   function handleSignOut() {
@@ -200,28 +282,18 @@ export default function ChatPage() {
 
   if (!userId) return null;
 
-  const recents =
-    messages.length > 0
-      ? [
-          {
-            id: sessionId ?? "current",
-            title:
-              (messages.find((m) => m.role === "user")?.content ??
-                "New conversation").slice(0, 40),
-            active: view === "chat",
-          },
-        ]
-      : [];
-
   return (
     <div className="h-screen flex bg-[var(--bg)]">
       {sidebarOpen && (
         <Sidebar
           displayName={displayName}
-          recents={recents}
+          sessions={sessions}
+          activeSessionId={sessionId}
           view={view}
           onView={setView}
           onNewChat={handleNewChat}
+          onSelectSession={handleSelectSession}
+          onDeleteSession={handleDeleteSession}
           onCloseSidebar={() => setSidebarOpen(false)}
           matchCount={matches.length}
         />
