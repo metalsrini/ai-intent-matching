@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
             { role: "system", content: INTENT_DISCOVERY_SYSTEM_PROMPT },
             ...contextMessages,
           ],
-          { temperature: 0.7, maxTokens: 16384 }
+          { temperature: 0.9, maxTokens: 65536 }
         )) {
           send(controller, chunk);
           if (chunk.type === "content") finalContent += chunk.delta;

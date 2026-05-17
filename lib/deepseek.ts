@@ -52,7 +52,7 @@ export async function chatCompletion(
   const response = await deepseek.chat.completions.create({
     model: DEEPSEEK_MODEL,
     messages,
-    temperature: options.temperature ?? 0.7,
+    temperature: options.temperature ?? 0.9,
     max_tokens: options.maxTokens ?? 1024,
   });
 
@@ -95,10 +95,11 @@ export async function* chatCompletionStream(
     body: JSON.stringify({
       model: options.model ?? DEEPSEEK_MODEL,
       messages,
-      temperature: options.temperature ?? 0.7,
-      // Max it out — let the model use its full ceiling for reasoning + content.
-      // Cheap models at ~$0.26/M output ≈ $0.004 per maxed-out message.
-      max_tokens: options.maxTokens ?? 16384,
+      temperature: options.temperature ?? 0.9,
+      // Max it out — hy3-preview's playground default is 65536, matching that
+      // so reasoning + content both have effectively unlimited headroom.
+      // Cheap model at ~$0.26/M output ≈ $0.017 per fully-maxed message.
+      max_tokens: options.maxTokens ?? 65536,
       stream: true,
       // Surface reasoning tokens. No reasoning-specific cap because
       // OpenRouter doesn't propagate reasoning.max_tokens to all providers.
