@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ArrowUp,
@@ -11,10 +11,22 @@ import {
   Sparkles,
   Target,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 
-type Message = {
+export interface SearchSource {
+  url: string;
+  title: string;
+  snippet: string;
+  domain: string;
+}
+
+export type Message = {
   role: "user" | "assistant";
   content: string;
+  sources?: SearchSource[];
 };
 
 interface Props {
@@ -115,9 +127,147 @@ function SuggestionChip({
   );
 }
 
+function CitationPill({ n, source }: { n: number; source?: SearchSource }) {
+  if (!source) return <span>[{n}]</span>;
+  return (
+    <a
+      href={source.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={source.title}
+      className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 mx-0.5 rounded-full bg-[var(--hover-bg)] text-[10px] font-semibold text-[var(--text-muted)] hover:bg-[var(--active-bg)] hover:text-[var(--text)] no-underline align-text-top transition-colors"
+    >
+      {n}
+    </a>
+  );
+}
+
+// Walk react-markdown's children and replace [n] / [n][m] sequences in any
+// text nodes with CitationPill components.
+function transformCitations(
+  children: ReactNode,
+  sources: SearchSource[]
+): ReactNode {
+  if (children == null) return children;
+  if (typeof children === "string") {
+    return splitTextOnCitations(children, sources);
+  }
+  if (Array.isArray(children)) {
+    return children.map((c, i) => {
+      if (typeof c === "string") {
+        return <Fragment key={i}>{splitTextOnCitations(c, sources)}</Fragment>;
+      }
+      return c;
+    });
+  }
+  return children;
+}
+
+function splitTextOnCitations(
+  text: string,
+  sources: SearchSource[]
+): ReactNode[] {
+  const parts = text.split(/(\[\d+\](?:\[\d+\])*)/g);
+  const out: ReactNode[] = [];
+  parts.forEach((part, i) => {
+    if (!part) return;
+    if (/^\[\d+\]/.test(part)) {
+      const matches = part.match(/\[(\d+)\]/g) || [];
+      matches.forEach((m, j) => {
+        const n = parseInt(m.slice(1, -1), 10);
+        const src = sources[n - 1];
+        out.push(<CitationPill key={`c-${i}-${j}`} n={n} source={src} />);
+      });
+    } else {
+      out.push(<Fragment key={`t-${i}`}>{part}</Fragment>);
+    }
+  });
+  return out;
+}
+
+function Sources({ sources }: { sources: SearchSource[] }) {
+  if (!sources.length) return null;
+  return (
+    <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
+      {sources.map((s, i) => (
+        <a
+          key={i}
+          href={s.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 w-[220px] rounded-xl border border-[var(--border)] bg-white p-3 hover:bg-[var(--hover-bg)] transition-colors no-underline"
+        >
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <span className="w-4 h-4 rounded-full bg-[var(--hover-bg)] text-[var(--text-muted)] text-[10px] font-semibold flex items-center justify-center shrink-0">
+              {i + 1}
+            </span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`}
+              alt=""
+              className="w-4 h-4 rounded-sm shrink-0"
+              loading="lazy"
+            />
+            <span className="text-[11px] text-[var(--text-subtle)] truncate flex-1">
+              {s.domain}
+            </span>
+          </div>
+          <div className="text-[12px] text-[var(--text)] line-clamp-2 leading-snug">
+            {s.title}
+          </div>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function AssistantBody({
+  content,
+  sources,
+}: {
+  content: string;
+  sources: SearchSource[];
+}) {
+  // Each block-level markdown renderer is overridden so we can splice
+  // citation pills into its text children.
+  const wrap =
+    <T extends keyof React.JSX.IntrinsicElements>(Tag: T) =>
+    ({ children, ...props }: React.ComponentPropsWithoutRef<T>) => {
+      const TagComponent = Tag as React.ElementType;
+      return (
+        <TagComponent {...props}>
+          {transformCitations(children, sources)}
+        </TagComponent>
+      );
+    };
+
+  return (
+    <div className="markdown-body text-[15px] text-[var(--text)] leading-relaxed">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={{
+          p: wrap("p"),
+          li: wrap("li"),
+          td: wrap("td"),
+          th: wrap("th"),
+          h1: wrap("h1"),
+          h2: wrap("h2"),
+          h3: wrap("h3"),
+          h4: wrap("h4"),
+          h5: wrap("h5"),
+          h6: wrap("h6"),
+          blockquote: wrap("blockquote"),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 function MessageBubble({ msg }: { msg: Message }) {
-  const isUser = msg.role === "user";
-  if (isUser) {
+  if (msg.role === "user") {
     return (
       <div className="flex justify-end">
         <div className="max-w-[80%] bg-[var(--user-bubble)] text-[var(--text)] rounded-3xl px-5 py-3 text-[15px] leading-relaxed whitespace-pre-wrap">
@@ -126,9 +276,11 @@ function MessageBubble({ msg }: { msg: Message }) {
       </div>
     );
   }
+
   return (
-    <div className="text-[var(--text)] text-[15px] leading-relaxed whitespace-pre-wrap">
-      {msg.content}
+    <div className="w-full">
+      {msg.sources && msg.sources.length > 0 && <Sources sources={msg.sources} />}
+      <AssistantBody content={msg.content} sources={msg.sources ?? []} />
     </div>
   );
 }

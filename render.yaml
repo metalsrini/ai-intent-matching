@@ -8,6 +8,8 @@ services:
     envVars:
       - key: DEEPSEEK_API_KEY
         sync: false
+      - key: TAVILY_API_KEY
+        sync: false
       - key: DEEPSEEK_BASE_URL
         value: https://openrouter.ai/api/v1
       - key: DEEPSEEK_MODEL

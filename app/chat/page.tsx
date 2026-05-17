@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut, PanelLeft, SquarePen } from "lucide-react";
-import ChatInterface from "@/components/ChatInterface";
+import ChatInterface, { type SearchSource } from "@/components/ChatInterface";
 import Sidebar, { type ChatView } from "@/components/Sidebar";
 import MatchDisplay from "@/components/MatchDisplay";
 import FriendRequests from "@/components/FriendRequests";
@@ -12,6 +12,7 @@ type Message = {
   id?: string;
   role: "user" | "assistant";
   content: string;
+  sources?: SearchSource[];
 };
 
 type Match = {
@@ -111,7 +112,11 @@ export default function ChatPage() {
 
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: data.reply },
+        {
+          role: "assistant",
+          content: data.reply,
+          sources: Array.isArray(data.sources) ? data.sources : undefined,
+        },
       ]);
 
       setTimeout(fetchMatches, 5_000);
