@@ -96,16 +96,13 @@ export async function* chatCompletionStream(
       model: options.model ?? DEEPSEEK_MODEL,
       messages,
       temperature: options.temperature ?? 0.7,
-      // Total budget covers reasoning + content. Reasoning-heavy models can
-      // burn most of a small budget thinking, leaving the final answer
-      // truncated. 8192 gives both phases real room.
-      max_tokens: options.maxTokens ?? 8192,
+      // Max it out — let the model use its full ceiling for reasoning + content.
+      // Cheap models at ~$0.26/M output ≈ $0.004 per maxed-out message.
+      max_tokens: options.maxTokens ?? 16384,
       stream: true,
-      // OpenRouter: surface reasoning tokens as `delta.reasoning` for models
-      // that produce them (thinking-capable). The max_tokens here is a hard
-      // cap on the *reasoning* portion specifically so it can never eat the
-      // whole budget — content always has room to land.
-      reasoning: { exclude: false, max_tokens: 2500 },
+      // Surface reasoning tokens. No reasoning-specific cap because
+      // OpenRouter doesn't propagate reasoning.max_tokens to all providers.
+      reasoning: { exclude: false },
     }),
     signal: options.signal,
   });
