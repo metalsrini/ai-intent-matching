@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
     // Call DeepSeek with the intent-discovery system prompt
     const reply = await chatCompletion(
       [{ role: "system", content: INTENT_DISCOVERY_SYSTEM_PROMPT }, ...contextMessages],
-      { temperature: 0.7, maxTokens: 512 }
+      { temperature: 0.7, maxTokens: 4096 }
     );
 
     // Persist the assistant reply
